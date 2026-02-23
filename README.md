@@ -2,33 +2,47 @@
 
 
 
-This repo documents my journey building:
+This repository documents a real on-prem DevOps platform I built and operate for learning and demos.
 
 
 
-\- Teleport On-Prem Access
+\## Current stack
 
-\- GitLab CI/CD
+\- Teleport (On-Prem + Cloud option)
 
-\- Rancher + Kubernetes Cluster
+\- GitLab (CI/CD)
 
-\- Nginx LoadBalancer \& Reverse Proxy
+\- Rancher + Kubernetes (3-node)
 
-\- Domain + Tunnel Networking
+\- Nginx Load Balancer \& Reverse Proxy
+
+\- Domain + Cloudflare (Tunnel \& DNS)
 
 
 
 \## Structure
 
+\- `architecture/` — diagrams and overview
+
+\- `teleport/` — Teleport install \& HA / tunnel methods
+
+\- `nginx/` — loadbalancer configs \& proxy examples
+
+\- `cloudflared/` — sample Cloudflare Tunnel configs
+
+\- `docs/` — operational notes and troubleshooting
 
 
-\- architecture/ : system design \& diagrams
 
-\- teleport/ : access gateway setup
+\## How to use this repo
 
-\- gitlab/ : CI/CD setup
+1\. Browse `teleport/` first for Teleport deployment options.
 
-\- rancher-k8s/ : cluster deployment
+2\. Copy configs (files ending `.example`) to servers and adapt IPs/domains.
 
-\- networking/ : tunnel, NAT, DNS
+3\. Keep notes in `docs/` for any troubleshooting you encounter.
+
+
+
+> Work in progress — I add one module at a time (commit-by-commit).
 
