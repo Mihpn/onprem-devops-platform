@@ -4,15 +4,15 @@
 
 Internet
 
-&nbsp;-> Domain
+ -> Domain
 
-&nbsp;-> LoadBalancer
+ -> LoadBalancer
 
-&nbsp;-> Nginx Reverse Proxy
+ -> Nginx Reverse Proxy
 
-&nbsp;-> Rancher
+ -> Rancher
 
-&nbsp;-> Kubernetes Cluster
+ -> Kubernetes Cluster
 
-&nbsp;-> CI/CD via GitLab
+ -> CI/CD via GitLab
 

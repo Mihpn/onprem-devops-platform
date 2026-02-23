@@ -16,3 +16,19 @@ This repo documents my journey building:
 
 \- Domain + Tunnel Networking
 
+
+
+\## Structure
+
+
+
+\- architecture/ : system design \& diagrams
+
+\- teleport/ : access gateway setup
+
+\- gitlab/ : CI/CD setup
+
+\- rancher-k8s/ : cluster deployment
+
+\- networking/ : tunnel, NAT, DNS
+
