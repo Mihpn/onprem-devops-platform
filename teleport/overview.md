@@ -1,22 +1,24 @@
-\# Teleport On-Prem Overview
+# Teleport Deployment Guide
 
+This folder contains multiple deployment methods.
 
+Start here:
 
-Goals:
+1. Read Method Selection Guide
+2. Choose your deployment topology
+3. Follow one method completely
 
-\- Secure bastion (Teleport) for lab servers.
+---
 
-\- Provide HTTPS access at `teleport-onpre.devopseduvn.live`.
+## Deployment Methods
 
-\- Support two deployment modes:
+- Method 1 — Public IP + LoadBalancer
+- Method 2 — DNS-01 + Cloudflare Tunnel (ISP Bypass)
+- Method 3 — AWS Quick Deploy (Fast Lab)
 
-&nbsp; - Method 1: Public IP + certbot (standard)
+---
 
-&nbsp; - Method 2: Cloudflare DNS (DNS-01) + Cloudflare Tunnel (bypass ISP NAT)
+## File Structure
 
-
-
-See `method-1-public-ip.md` and `method-2-cloudflare-tunnel.md` for step-by-step. 
-
-=))
-
+teleport.yaml.example → example teleport config  
+teleport.service → systemd service file

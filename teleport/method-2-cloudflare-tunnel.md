@@ -1,314 +1,188 @@
-\# Teleport On-Prem Deployment (DNS-01 + Cloudflare Tunnel + Nginx LoadBalancer)
+# Teleport On-Prem Deployment (DNS-01 + Cloudflare Tunnel + Nginx LoadBalancer)
 
+Domain: teleport.kihpn.online  
+Teleport Server: 192.168.1.102  
+LoadBalancer: 192.168.1.101  
 
+---
 
-This guide describes a hybrid deployment method designed for environments
-
-where ISP blocks incoming ports (VNPT/Viettel home networks).
-
-
-
-Architecture:
-
-
+## Architecture
 
 User → Cloudflare DNS → Cloudflare Tunnel → LoadBalancer (Nginx) → Teleport Server
 
+---
 
+## Why This Method?
 
-Domain:
+Some ISPs (VNPT / Viettel) block incoming ports 80/443.
 
-teleport.kihpn.online
+Instead of exposing a public IP:
 
-
-
-Teleport Server:
-
-192.168.1.102
-
-
-
-LoadBalancer:
-
-192.168.1.101
-
-
+- Request SSL using Cloudflare DNS API (DNS-01)
+- Use Cloudflare Tunnel for inbound access
+- Keep Nginx as internal reverse proxy
 
 ---
 
-
-
-\## Why This Method?
-
-
-
-Some ISPs block ports 80/443 or do not allow router configuration.
-
-Instead of exposing a public IP, we:
-
-
-
-\- Request SSL certificate using Cloudflare DNS API (DNS-01 challenge)
-
-\- Use Cloudflare Tunnel for secure inbound access
-
-\- Keep Nginx as reverse proxy internally
-
-
-
----
-
-
-
-\## Step 1 — Obtain SSL using Cloudflare DNS API
-
-
+## 1. Obtain SSL Certificate (DNS-01)
 
 On LoadBalancer (192.168.1.101):
 
-
-
-Install packages:
-
-
-
+```bash
 apt update
-
 apt install certbot python3-certbot-dns-cloudflare -y
-
-
+```
 
 Create credential file:
 
-
-
+```bash
 mkdir -p ~/.secrets
-
 vi ~/.secrets/cloudflare.ini
-
-
+```
 
 Content:
 
-
-
-dns\_cloudflare\_api\_token=YOUR\_API\_TOKEN
-
-
+```text
+dns_cloudflare_api_token=YOUR_API_TOKEN
+```
 
 Set permission:
 
-
-
+```bash
 chmod 600 ~/.secrets/cloudflare.ini
-
-
+```
 
 Request certificate:
 
+```bash
+certbot certonly \
+ --dns-cloudflare \
+ --dns-cloudflare-credentials ~/.secrets/cloudflare.ini \
+ -d teleport.kihpn.online \
+ --agree-tos -m YOUR_EMAIL
+```
 
+Certificates location:
 
-certbot certonly \\
-
-&nbsp;--dns-cloudflare \\
-
-&nbsp;--dns-cloudflare-credentials ~/.secrets/cloudflare.ini \\
-
-&nbsp;-d teleport.kihpn.online \\
-
-&nbsp;--agree-tos -m YOUR\_EMAIL
-
-
-
-Certificates will be stored at:
-
-
-
+```
 /etc/letsencrypt/live/teleport.kihpn.online/
-
-
+```
 
 ---
 
-
-
-\## Step 2 — Configure Nginx LoadBalancer
-
-
+## 2. Configure Nginx LoadBalancer
 
 Create:
 
+```bash
+vi /etc/nginx/conf.d/teleport.conf
+```
 
-
-/etc/nginx/conf.d/teleport.conf
-
-
-
+```nginx
 server {
+    listen 443 ssl;
+    server_name teleport.kihpn.online;
 
-&nbsp;   listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/teleport.kihpn.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/teleport.kihpn.online/privkey.pem;
 
-&nbsp;   server\_name teleport.kihpn.online;
-
-
-
-&nbsp;   ssl\_certificate /etc/letsencrypt/live/teleport.kihpn.online/fullchain.pem;
-
-&nbsp;   ssl\_certificate\_key /etc/letsencrypt/live/teleport.kihpn.online/privkey.pem;
-
-
-
-&nbsp;   location / {
-
-&nbsp;       proxy\_pass https://192.168.1.102:443;
-
-&nbsp;       proxy\_http\_version 1.1;
-
-&nbsp;       proxy\_set\_header Host $host;
-
-&nbsp;       proxy\_set\_header Upgrade $http\_upgrade;
-
-&nbsp;       proxy\_set\_header Connection "upgrade";
-
-&nbsp;       proxy\_set\_header X-Real-IP $remote\_addr;
-
-&nbsp;   }
-
+    location / {
+        proxy_pass https://192.168.1.102:443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
+    }
 }
 
+server {
+    listen 80;
+    server_name teleport.kihpn.online;
+    return 301 https://$host$request_uri;
+}
+```
 
+Reload nginx:
 
-Restart nginx:
-
-
-
+```bash
 systemctl restart nginx
-
-
+```
 
 ---
 
-
-
-\## Step 3 — Setup Cloudflare Tunnel
-
-
+## 3. Setup Cloudflare Tunnel
 
 Install cloudflared:
 
-
-
+```bash
 wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-
 dpkg -i cloudflared-linux-amd64.deb
-
-
+```
 
 Login:
 
-
-
+```bash
 cloudflared tunnel login
-
-
+```
 
 Create tunnel:
 
-
-
+```bash
 cloudflared tunnel create teleport-tunnel
-
-
+```
 
 Create config:
 
+```bash
+vi /etc/cloudflared/config.yml
+```
 
-
-/etc/cloudflared/config.yml
-
-
-
+```yaml
 tunnel: teleport-tunnel
-
 credentials-file: /root/.cloudflared/UUID.json
 
-
-
 ingress:
-
-&nbsp; - hostname: teleport.kihpn.online
-
-&nbsp;   service: https://192.168.1.101:443
-
-&nbsp; - service: http\_status:404
-
-
+  - hostname: teleport.kihpn.online
+    service: https://192.168.1.101:443
+  - service: http_status:404
+```
 
 Start tunnel:
 
-
-
+```bash
 cloudflared service install
-
 systemctl start cloudflared
-
-
+```
 
 ---
 
-
-
-\## Step 4 — Configure Teleport Backend
-
-
+## 4. Configure Teleport Backend
 
 On Teleport Server (192.168.1.102):
 
-
-
 Ensure teleport.yaml contains:
 
+```yaml
+proxy_service:
+  enabled: "yes"
+  web_listen_addr: 0.0.0.0:443
+  public_addr: teleport.kihpn.online:443
+```
 
+Restart teleport:
 
-proxy\_service:
-
-&nbsp; enabled: "yes"
-
-&nbsp; web\_listen\_addr: 0.0.0.0:443
-
-&nbsp; public\_addr: teleport.kihpn.online:443
-
-
-
-Restart:
-
-
-
+```bash
 systemctl restart teleport
-
-
+```
 
 ---
 
-
-
-\## Final Result
-
-
-
-User traffic flow:
-
-
+## Final Result
 
 Cloudflare Edge
-
-&nbsp;→ Tunnel
-
-&nbsp;→ Nginx LoadBalancer (SSL termination)
-
-&nbsp;→ Teleport Server
-
-
+ → Tunnel
+ → Nginx LoadBalancer (SSL termination)
+ → Teleport Server
 
 No router port forwarding required.
-

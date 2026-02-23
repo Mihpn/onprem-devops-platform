@@ -1,346 +1,201 @@
-\# Teleport Deployment — Method 3 (AWS Quick Deploy)
+# Teleport Deployment — Method 3 (AWS Quick Deploy)
 
+Domain: teleport.kihpn.online  
+Deployment Type: Cloud (AWS EC2)  
+Topology: Direct Public Access  
 
+---
 
-This method is designed for quick lab setup using AWS EC2.
-
-No LoadBalancer, no Cloudflare Tunnel required.
-
-
-
-Architecture:
-
-
+## Architecture
 
 User Internet
+ → AWS EC2 Public IP
+ → Teleport Server (Proxy + Auth)
 
-&nbsp;  ↓
+This method does NOT use:
 
-AWS EC2 Public IP
+- Local LoadBalancer
+- Cloudflare Tunnel
 
-&nbsp;  ↓
-
-Teleport Server (Cloud)
-
-
-
-Domain:
-
-teleport.kihpn.online
-
-
+It is designed for quick testing or external lab access.
 
 ---
 
+## Why This Method?
 
+Use this deployment when:
 
-\## Why This Method?
+- Local ISP blocks ports
+- Need a fast public Teleport environment
+- Want a simple standalone setup
 
-
-
-Use this when:
-
-
-
-\- Local ISP blocks ports
-
-\- Need a fast public environment
-
-\- Want simple Teleport testing
-
-
-
-This is the fastest working setup.
-
-
+This is the fastest working Teleport deployment.
 
 ---
 
-
-
-\## Step 1 — Create EC2 Instance
-
-
+## 1. Create EC2 Instance
 
 AWS Console → EC2 → Launch Instance
 
+Recommended configuration:
 
+- OS: Ubuntu 22.04
+- Instance type: t3.micro (Free Tier)
+- Storage: Default
 
-Recommended:
+Security Group inbound rules:
 
+- TCP 22 → SSH
+- TCP 443 → Teleport Web UI
+- TCP 3025 → Teleport Auth
 
+Example:
 
-\- Ubuntu 22.04
-
-\- t3.micro (Free Tier)
-
-\- Allow inbound ports:
-
-
-
-22 (SSH)
-
-443 (HTTPS)
-
-3025 (Teleport Auth)
-
-
-
-Security Group Example:
-
-
-
-Type: HTTPS
-
-Port: 443
-
-Source: 0.0.0.0/0
-
-
+| Type | Port | Source |
+|------|------|--------|
+| SSH | 22 | Your IP |
+| HTTPS | 443 | 0.0.0.0/0 |
+| Custom TCP | 3025 | 0.0.0.0/0 |
 
 ---
 
+## 2. Connect to Server
 
-
-\## Step 2 — Connect to Server
-
-
-
-ssh ubuntu@YOUR\_PUBLIC\_IP
-
-
+```bash
+ssh ubuntu@YOUR_PUBLIC_IP
+```
 
 Update system:
 
-
-
-sudo apt update \&\& sudo apt upgrade -y
-
-
+```bash
+sudo apt update && sudo apt upgrade -y
+```
 
 ---
 
+## 3. Install Teleport (Official Script)
 
-
-\## Step 3 — Install Teleport (Official Script)
-
-
-
+```bash
 curl https://cdn.teleport.dev/install.sh | bash -s 17.0.5
+```
 
+Verify installation:
 
-
-Check version:
-
-
-
+```bash
 teleport version
-
-
+```
 
 ---
 
+## 4. Generate Teleport Configuration
 
+```bash
+teleport configure -o file \
+ --acme \
+ --acme-email=YOUR_EMAIL \
+ --cluster-name=teleport.kihpn.online \
+ > /etc/teleport.yaml
+```
 
-\## Step 4 — Generate Teleport Configuration
+Open and review config:
 
-
-
-teleport configure -o file \\
-
-&nbsp;--acme \\
-
-&nbsp;--acme-email=YOUR\_EMAIL \\
-
-&nbsp;--cluster-name=teleport.kihpn.online > /etc/teleport.yaml
-
-
-
-Important:
-
-
-
-Open config file:
-
-
-
+```bash
 sudo vi /etc/teleport.yaml
+```
 
+Notes:
 
-
-Find ACME section.
-
-
-
-If using external SSL or Cloudflare later,
-
-you may comment ACME lines.
-
-
+- ACME will automatically request SSL from Let's Encrypt.
+- If later using Cloudflare or external SSL, you may comment the ACME section.
 
 ---
 
+## 5. Create Systemd Service
 
-
-\## Step 5 — Start Teleport
-
-
-
-Create systemd service:
-
-
-
+```bash
 sudo tee /etc/systemd/system/teleport.service <<EOF
-
-\[Unit]
-
+[Unit]
 Description=Teleport Service
-
 After=network.target
 
-
-
-\[Service]
-
+[Service]
 ExecStart=/usr/local/bin/teleport start --config=/etc/teleport.yaml
-
 Restart=on-failure
 
-
-
-\[Install]
-
+[Install]
 WantedBy=multi-user.target
-
 EOF
+```
 
+Reload and start service:
 
-
-Reload and start:
-
-
-
+```bash
 sudo systemctl daemon-reload
-
 sudo systemctl enable teleport
-
 sudo systemctl start teleport
-
-
-
-Check:
-
-
-
 sudo systemctl status teleport
-
-
+```
 
 ---
 
+## 6. Create Admin User
 
-
-\## Step 6 — Create Admin User
-
-
-
+```bash
 sudo tctl users add admin --roles=editor,access --logins=root,ubuntu
-
-
+```
 
 Teleport will generate a login URL.
 
-
-
-Open browser and complete setup.
-
-
+Open it in browser and complete setup.
 
 ---
 
-
-
-\## Step 7 — Point Domain to AWS
-
-
+## 7. Point Domain to AWS
 
 In Cloudflare DNS:
 
-
-
 Create A Record:
 
+Name: teleport  
+Content: YOUR_EC2_PUBLIC_IP  
 
+Set Proxy Status:
 
-Name: teleport
-
-Content: YOUR\_EC2\_PUBLIC\_IP
-
-
-
-Proxy Status: DNS Only (for ACME validation)
-
-
+DNS Only (required for ACME validation)
 
 Wait 1–2 minutes for DNS propagation.
 
-
-
 ---
 
-
-
-\## Step 8 — Access Teleport
-
-
+## 8. Access Teleport
 
 Open:
 
-
-
+```
 https://teleport.kihpn.online
+```
 
-
-
-Login using created admin user.
-
-
+Login using the admin account created earlier.
 
 ---
 
-
-
-\## Final Result
-
-
+## Final Result
 
 Public Internet
-
-&nbsp;→ AWS EC2
-
-&nbsp;→ Teleport Proxy + Auth
-
-
+ → AWS EC2
+ → Teleport Proxy + Auth
 
 No local NAT.
-
-No LoadBalancer needed.
-
-Ideal for quick demos or testing.
-
-
+No LoadBalancer required.
+Ideal for quick testing environments.
 
 ---
 
+## Notes
 
+This deployment is NOT recommended for production HA setups.
 
-\## Notes
+For hybrid or on-prem environments use:
 
-
-
-This method is NOT intended for production HA setups.
-
-Use LoadBalancer or Tunnel methods for hybrid deployments.
-
-
-
+- Method 1 — Public IP + LoadBalancer
+- Method 2 — DNS-01 + Cloudflare Tunnel

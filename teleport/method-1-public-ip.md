@@ -1,416 +1,211 @@
-\# Teleport On-Prem Deployment (Public IP + Load Balancer)
+# Teleport On-Prem Deployment (Public IP + LoadBalancer)
 
-
-
-This guide describes a full on-premise Teleport deployment using:
-
-
-
-\- Domain: teleport.kihpn.online
-
-\- Teleport Server: 192.168.1.102
-
-\- Load Balancer (Nginx): 192.168.1.101
-
-
-
-Architecture Flow:
-
-
-
-Internet
-
-&nbsp;→ teleport.kihpn.online
-
-&nbsp;→ Nginx Load Balancer (SSL Termination)
-
-&nbsp;→ Teleport Server (192.168.1.102)
-
-
+Domain: teleport.kihpn.online  
+Teleport Server: 192.168.1.102  
+LoadBalancer: 192.168.1.101  
 
 ---
 
-
-
-\## 1. Install Teleport on Teleport Server (192.168.1.102)
-
-
-
-Install an older version first (for upgrade testing).
-
-
+## 1. Install Teleport
 
 ```bash
-
 wget https://get.gravitational.com/teleport-v13.2.0-linux-amd64-bin.tar.gz
-
 tar -xzf teleport-v13.2.0-linux-amd64-bin.tar.gz
 
 mv teleport/tctl /usr/local/bin/
-
 mv teleport/tsh /usr/local/bin/
-
 mv teleport/teleport /usr/local/bin/
 
-
-
 teleport version
-
 tctl version
-
 tsh version
 
-
-
 mkdir -p /etc/teleport
+```
 
+---
 
+## 2. Create Teleport Configuration
 
-\## 2. Create Teleport Configuration
+Create file:
 
-Create:
-
+```bash
 vi /etc/teleport/teleport.yaml
+```
 
-
-
-\## config file.yaml
-
-
-
+```yaml
 version: v3
-
 teleport:
+  nodename: teleport
+  data_dir: /var/lib/teleport
+  log:
+    output: stderr
+    severity: INFO
 
-&nbsp; nodename: teleport
+auth_service:
+  enabled: "yes"
+  listen_addr: 0.0.0.0:3025
+  cluster_name: teleport.kihpn.online
+  proxy_listener_mode: multiplex
 
-&nbsp; data\_dir: /var/lib/teleport
+ssh_service:
+  enabled: "yes"
 
-&nbsp; log:
+proxy_service:
+  enabled: "yes"
+  web_listen_addr: 0.0.0.0:443
+  public_addr: teleport.kihpn.online:443
+  https_keypairs: []
+```
 
-&nbsp;   output: stderr
+---
 
-&nbsp;   severity: INFO
+## 3. Create Systemd Service
 
-&nbsp;   format:
-
-&nbsp;     output: text
-
-
-
-auth\_service:
-
-&nbsp; enabled: "yes"
-
-&nbsp; listen\_addr: 0.0.0.0:3025
-
-&nbsp; cluster\_name: teleport.kihpn.online
-
-&nbsp; proxy\_listener\_mode: multiplex
-
-
-
-ssh\_service:
-
-&nbsp; enabled: "yes"
-
-
-
-proxy\_service:
-
-&nbsp; enabled: "yes"
-
-&nbsp; web\_listen\_addr: 0.0.0.0:443
-
-&nbsp; public\_addr: teleport.kihpn.online:443
-
-&nbsp; https\_keypairs: \[]
-
-&nbsp; https\_keypairs\_reload\_interval: 0s
-
---------------------------------------
-
-
-
-\## 3. Create Systemd Service
-
-Creat:
-
+```bash
 vi /etc/systemd/system/teleport.service
+```
 
-
-
-\[Unit]
-
+```ini
+[Unit]
 Description=Teleport Service
-
-Documentation=https://gravitational.com/teleport/docs
-
 After=network.target
 
-
-
-\[Service]
-
+[Service]
 User=root
-
 ExecStart=/usr/local/bin/teleport start --config=/etc/teleport/teleport.yaml
-
 Restart=on-failure
-
 LimitNOFILE=65536
 
-
-
-\[Install]
-
+[Install]
 WantedBy=multi-user.target
-
---------------------------------------
+```
 
 Start Teleport:
 
+```bash
 systemctl daemon-reload
-
 systemctl start teleport
-
 systemctl status teleport
+```
 
+---
 
+## 4. Setup SSL on LoadBalancer
 
---------------------------------------
-
-
-
-\## 4. Setup SSL on Load Balancer (192.168.1.101)
-
-
-
-Install required packages:
-
-
-
+```bash
 apt update
-
 apt install apache2-utils certbot python3-certbot-nginx -y
+```
 
+```bash
+certbot certonly \
+ --standalone \
+ -d teleport.kihpn.online \
+ --agree-tos \
+ -m YOUR_EMAIL \
+ --keep-until-expiring
+```
 
+---
 
-Request certificate:
+## 5. Configure Nginx Reverse Proxy
 
+```bash
+vi /etc/nginx/conf.d/lb.conf
+```
 
-
-certbot certonly \\
-
-&nbsp;--standalone \\
-
-&nbsp;-d teleport.kihpn.online \\
-
-&nbsp;--agree-tos \\
-
-&nbsp;-m YOUR\_EMAIL \\
-
-&nbsp;--keep-until-expiring
-
---------------------------------------
-
-
-
-\## 5. Configure Nginx Reverse Proxy
-
-
-
-\#Create:
-
-
-
-/etc/nginx/conf.d/lb.conf
-
+```nginx
 server {
+    listen 443 ssl;
+    server_name teleport.kihpn.online;
 
-&nbsp;   listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/teleport.kihpn.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/teleport.kihpn.online/privkey.pem;
 
-&nbsp;   server\_name teleport.kihpn.online;
-
-
-
-&nbsp;   ssl\_certificate /etc/letsencrypt/live/teleport.kihpn.online/fullchain.pem;
-
-&nbsp;   ssl\_certificate\_key /etc/letsencrypt/live/teleport.kihpn.online/privkey.pem;
-
-
-
-&nbsp;   location / {
-
-&nbsp;       proxy\_pass https://192.168.1.102:443;
-
-&nbsp;       proxy\_http\_version 1.1;
-
-&nbsp;       proxy\_set\_header Host $host;
-
-&nbsp;       proxy\_set\_header Upgrade $http\_upgrade;
-
-&nbsp;       proxy\_set\_header Connection "upgrade";
-
-&nbsp;       proxy\_set\_header X-Real-IP $remote\_addr;
-
-&nbsp;       proxy\_set\_header X-Forwarded-For $proxy\_add\_x\_forwarded\_for;
-
-&nbsp;       proxy\_set\_header X-Forwarded-Proto $scheme;
-
-&nbsp;   }
-
+    location / {
+        proxy_pass https://192.168.1.102:443;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
+    }
 }
 
-
-
 server {
-
-&nbsp;   listen 80;
-
-&nbsp;   server\_name teleport.kihpn.online;
-
-&nbsp;   return 301 https://$host$request\_uri;
-
+    listen 80;
+    server_name teleport.kihpn.online;
+    return 301 https://$host$request_uri;
 }
+```
 
-
-
-\#Reload nginx:
-
-
-
+```bash
 systemctl restart nginx
+```
 
---------------------------------------------
+---
 
+## 6. Copy SSL Certificates
 
-
-\##6. Copy SSL Certificates to Teleport Server
-
-
-
-From Load Balancer:
-
-
-
+```bash
 scp /etc/letsencrypt/live/teleport.kihpn.online/fullchain.pem root@192.168.1.102:/etc/teleport/teleport.crt
-
 scp /etc/letsencrypt/live/teleport.kihpn.online/privkey.pem root@192.168.1.102:/etc/teleport/teleport.key
+```
 
+---
 
+## 7. Update Teleport Config With Certificates
 
-\##7. Update Teleport Config With Certificates
+```yaml
+proxy_service:
+  enabled: "yes"
+  web_listen_addr: 0.0.0.0:443
+  public_addr: teleport.kihpn.online:443
+  https_keypairs:
+    - cert_file: /etc/teleport/teleport.crt
+      key_file: /etc/teleport/teleport.key
+```
 
-
-
-\#Edit:
-
-
-
-/etc/teleport/teleport.yaml
-
-
-
-Update proxy section:
-
-
-
-proxy\_service:
-
-&nbsp; enabled: "yes"
-
-&nbsp; web\_listen\_addr: 0.0.0.0:443
-
-&nbsp; public\_addr: teleport.kihpn.online:443
-
-&nbsp; https\_keypairs:
-
-&nbsp;   - cert\_file: /etc/teleport/teleport.crt
-
-&nbsp;     key\_file: /etc/teleport/teleport.key
-
-
-
-Set permissions:
-
-
-
+```bash
 chmod 600 /etc/teleport/teleport.key
-
 chmod 644 /etc/teleport/teleport.crt
-
-
-
-Restart Teleport:
-
-
-
 systemctl restart teleport
-
-
+```
 
 Create admin user:
 
-
-
+```bash
 tctl users add admin --roles=editor,access --logins=root
+```
 
+---
 
+## 8. Optional — Deploy Teleport Cloud Node
 
--------------------------------------------------------
-
-\##8. Optional: Deploy Teleport Cloud Node (VPS)
-
-
-
-Install Teleport:
-
-
-
+```bash
 curl https://cdn.teleport.dev/install.sh | bash -s 17.0.5
+```
 
+```bash
+teleport configure -o file --acme \
+ --acme-email=YOUR_EMAIL \
+ --cluster-name=teleport.kihpn.online
+```
 
-
-Generate config:
-
-
-
-teleport configure -o file --acme \\
-
-&nbsp;--acme-email=YOUR\_EMAIL \\
-
-&nbsp;--cluster-name=teleport.kihpn.online
-
-
-
-Comment out ACME section if SSL is handled by Load Balancer.
-
-
-
-Start service:
-
-
-
+```bash
 systemctl enable teleport
-
 systemctl start teleport
+```
 
-
-
-Create admin user:
-
-
-
+```bash
 tctl users add admin --roles=editor,access --logins=root,ubuntu
+```
 
-Notes
+---
 
+## Notes
 
+If ISP blocks ports 80/443 (VNPT/Viettel), use:
 
-If you cannot open ports 80/443 due to ISP restrictions (VNPT/Viettel),
-
-use the Cloudflare Tunnel method instead (see method-2-cloudflare-tunnel.md).
-
-
-
+method-2-cloudflare-tunnel.md
