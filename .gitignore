@@ -9,6 +9,12 @@ Thumbs.db
 # Logs
 *.log
 
-# Terraform / kube config nếu sau này có
+# Secrets / local creds
+*.pem
+*.key
+~/.secrets/*
+credentials.ini
+
+# Terraform / k8s local artifacts
 *.tfstate
 kubeconfig
