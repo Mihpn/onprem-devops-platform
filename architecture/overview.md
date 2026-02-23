@@ -1,46 +1,24 @@
-\# Platform Architecture Overview
+# Platform Architecture Overview
 
+```mermaid
+flowchart TD
+    Internet["Internet Users"] --> Cloudflare["Cloudflare DNS/CDN"]
+    Cloudflare --> LB["Nginx Public LoadBalancer"]
 
+    LB --> Rancher["rancher.kihpn.online :108"]
+    LB --> GitLab["gitlab.kihpn.online :103"]
 
-Internet
+    %% Access Layer
+    Cloudflare --> TeleportCloud["Teleport Cloud (AWS Primary Access)"]
+    LB --> TeleportOnprem["Teleport On-Prem (192.168.1.102 Lab)"]
 
- -> Domain
+    %% Kubernetes Cluster
+    Rancher --> Node105["K8S Node105 Control Plane"]
+    Rancher --> Node106["K8S Node106 Worker"]
+    Rancher --> Node107["K8S Node107 Worker"]
 
- -> LoadBalancer
-
- -> Nginx Reverse Proxy
-
- -> Rancher
-
- -> Kubernetes Cluster
-
- -> CI/CD via GitLab
-
-
-
-
-
-Internet
-
-&nbsp; ↓
-
-Domain (Cloudflare)
-
-&nbsp; ↙        ↘
-
-Cloudflare CDN  Cloudflare Tunnel (optional)
-
-&nbsp; ↓                ↓
-
-Public LoadBalancer (nginx) — reverse proxy → Teleport (192.168.100.102)
-
-&nbsp;                               → Other internal services
-
-
-
-Notes:
-
-\- If you have a public IP, use certbot on LB and proxy to internal Teleport.
-
-\- If ISP blocks ports / no public IP, use Cloudflare Tunnel to expose Teleport securely.
-
+    %% CI/CD
+    GitLab --> Node105
+    GitLab --> Node106
+    GitLab --> Node107
+```
