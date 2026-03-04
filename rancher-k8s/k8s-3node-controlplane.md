@@ -2,9 +2,9 @@
 
 Nodes:
 
-- 192.168.100.105 → k8s-master-1
-- 192.168.100.106 → k8s-master-2
-- 192.168.100.107 → k8s-master-3
+- 192.168.1.105 → k8s-master-1
+- 192.168.1.106 → k8s-master-2
+- 192.168.1.107 → k8s-master-3
 
 CNI: Calico  
 Ingress: ingress-nginx (NodePort)
@@ -17,9 +17,9 @@ Ingress: ingress-nginx (NodePort)
 
 ```bash
 sudo bash -c 'cat >> /etc/hosts' <<EOF
-192.168.100.105 k8s-master-1
-192.168.100.106 k8s-master-2
-192.168.100.107 k8s-master-3
+192.168.1.105 k8s-master-1
+192.168.1.106 k8s-master-2
+192.168.1.107 k8s-master-3
 EOF
 ```
 
@@ -99,7 +99,7 @@ sudo apt-mark hold kubelet kubeadm kubectl
 ## Step 4 — Init cluster (ONLY k8s-master-1)
 
 ```bash
-sudo kubeadm init --control-plane-endpoint "192.168.100.105:6443" --upload-certs
+sudo kubeadm init --control-plane-endpoint "192.168.1.105:6443" --upload-certs
 ```
 
 Setup kubeconfig:
@@ -123,7 +123,7 @@ kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/
 Run the join command printed from kubeadm init:
 
 ```bash
-sudo kubeadm join 192.168.100.105:6443 \
+sudo kubeadm join 192.168.1.105:6443 \
 --token YOUR_TOKEN \
 --discovery-token-ca-cert-hash YOUR_HASH \
 --control-plane \

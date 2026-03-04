@@ -20,9 +20,9 @@
 #   192.168.1.102  → Teleport Node
 #   192.168.1.103  → GitLab Node
 #   192.168.1.104  → Harbor Node
-#   192.168.100.105 → k8s-master-1 (Control Plane)
-#   192.168.100.106 → k8s-master-2 (Control Plane)
-#   192.168.100.107 → k8s-master-3 (Control Plane)
+#   192.168.1.105 → k8s-master-1 (Control Plane)
+#   192.168.1.106 → k8s-master-2 (Control Plane)
+#   192.168.1.107 → k8s-master-3 (Control Plane)
 #   192.168.1.108  → Rancher Node
 #   Separate VM    → Dev/Test Server
 
@@ -267,9 +267,9 @@ sudo systemctl restart docker
 
 # --- 7.1: Prepare ALL 3 nodes (105, 106, 107) ---
 sudo bash -c 'cat >> /etc/hosts' <<EOF
-192.168.100.105 k8s-master-1
-192.168.100.106 k8s-master-2
-192.168.100.107 k8s-master-3
+192.168.1.105 k8s-master-1
+192.168.1.106 k8s-master-2
+192.168.1.107 k8s-master-3
 EOF
 
 sudo swapoff -a
@@ -306,7 +306,7 @@ sudo apt install -y kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl
 
 # --- 7.4: Init cluster (ONLY on k8s-master-1) ---
-sudo kubeadm init --control-plane-endpoint "192.168.100.105:6443" --upload-certs
+sudo kubeadm init --control-plane-endpoint "192.168.1.105:6443" --upload-certs
 
 mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
@@ -316,7 +316,7 @@ sudo chown $(id -u):$(id -g) $HOME/.kube/config
 kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
 
 # --- 7.6: Join master-2 & master-3 ---
-sudo kubeadm join 192.168.100.105:6443 \
+sudo kubeadm join 192.168.1.105:6443 \
   --token <TOKEN> \
   --discovery-token-ca-cert-hash <HASH> \
   --control-plane \
