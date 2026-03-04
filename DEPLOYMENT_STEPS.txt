@@ -1,0 +1,487 @@
+===============================================================================
+  DEPLOYMENT STEPS — On-Premises DevSecOps Platform
+  Project : https://github.com/Mihpn/onprem-devops-platform
+  Author  : kihpn1711
+  Updated : 2026-03-04
+
+  Purpose : Complete raw command-line reference documenting every step
+            from initial VM setup to running microservices on Kubernetes.
+            Proves this platform was built from absolute zero.
+===============================================================================
+
+
+===============================================================================
+  PHASE 0: VM PROVISIONING (VMware)
+===============================================================================
+
+# Create VMs on VMware with Ubuntu 22.04:
+#
+#   192.168.1.101  → LB Node (Nginx + cloudflared + Certbot)
+#   192.168.1.102  → Teleport Node
+#   192.168.1.103  → GitLab Node
+#   192.168.1.104  → Harbor Node
+#   192.168.100.105 → k8s-master-1 (Control Plane)
+#   192.168.100.106 → k8s-master-2 (Control Plane)
+#   192.168.100.107 → k8s-master-3 (Control Plane)
+#   192.168.1.108  → Rancher Node
+#   Separate VM    → Dev/Test Server
+
+# On ALL VMs — basic setup:
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl wget vim net-tools
+
+
+===============================================================================
+  PHASE 1: CLOUDFLARE DNS & DOMAIN SETUP
+===============================================================================
+
+# 1.1: Register domain (e.g., kihpn.online) and add to Cloudflare
+# 1.2: Create Cloudflare API Token (Zone:DNS Edit permission)
+# 1.3: Create DNS records (will be overridden by Tunnels later):
+#
+#   teleport.kihpn.online  → CNAME → tunnel UUID
+#   gitlab.kihpn.online    → CNAME → tunnel UUID
+#   harbor.kihpn.online    → CNAME → tunnel UUID
+#   rancher.kihpn.online   → CNAME → tunnel UUID
+
+
+===============================================================================
+  PHASE 2: NGINX LOAD BALANCER + SSL (LB Node: 192.168.1.101)
+===============================================================================
+
+# --- 2.1: Install Nginx ---
+sudo apt install -y nginx
+
+# --- 2.2: Install Certbot with Cloudflare DNS plugin ---
+sudo apt install -y certbot python3-certbot-dns-cloudflare
+
+# --- 2.3: Configure Cloudflare credentials ---
+mkdir -p ~/.secrets
+cat > ~/.secrets/cloudflare.ini <<'EOF'
+dns_cloudflare_api_token=YOUR_CLOUDFLARE_API_TOKEN
+EOF
+chmod 600 ~/.secrets/cloudflare.ini
+
+# --- 2.4: Request SSL certificates (DNS-01 — no port 80 needed!) ---
+sudo certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials ~/.secrets/cloudflare.ini \
+  -d teleport.kihpn.online \
+  --agree-tos -m YOUR_EMAIL --non-interactive
+
+sudo certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials ~/.secrets/cloudflare.ini \
+  -d gitlab.kihpn.online \
+  --agree-tos -m YOUR_EMAIL --non-interactive
+
+sudo certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials ~/.secrets/cloudflare.ini \
+  -d rancher.kihpn.online \
+  --agree-tos -m YOUR_EMAIL --non-interactive
+
+# --- 2.5: Configure Nginx virtual hosts ---
+# Example: /etc/nginx/conf.d/gitlab.conf
+cat > /etc/nginx/conf.d/gitlab.conf <<'EOF'
+server {
+    listen 443 ssl;
+    server_name gitlab.kihpn.online;
+
+    ssl_certificate /etc/letsencrypt/live/gitlab.kihpn.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gitlab.kihpn.online/privkey.pem;
+
+    location / {
+        proxy_pass http://192.168.1.103;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+server {
+    listen 80;
+    server_name gitlab.kihpn.online;
+    return 301 https://$host$request_uri;
+}
+EOF
+
+# (Repeat similar configs for teleport, harbor, rancher)
+
+sudo nginx -t
+sudo systemctl restart nginx
+
+
+===============================================================================
+  PHASE 3: CLOUDFLARE TUNNEL — ISP BYPASS (LB Node: 192.168.1.101)
+===============================================================================
+
+# --- 3.1: Install cloudflared ---
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i cloudflared-linux-amd64.deb
+
+# --- 3.2: Authenticate with Cloudflare ---
+sudo cloudflared tunnel login
+
+# --- 3.3: Create tunnels for each service ---
+sudo cloudflared tunnel create teleport-tunnel
+sudo cloudflared tunnel create gitlab-tunnel
+sudo cloudflared tunnel create rancher-tunnel
+
+# --- 3.4: Route DNS to tunnels ---
+sudo cloudflared tunnel route dns teleport-tunnel teleport.kihpn.online
+sudo cloudflared tunnel route dns gitlab-tunnel gitlab.kihpn.online
+sudo cloudflared tunnel route dns rancher-tunnel rancher.kihpn.online
+
+# --- 3.5: Configure tunnel ---
+sudo mkdir -p /etc/cloudflared
+cat > /etc/cloudflared/config.yml <<'EOF'
+tunnel: teleport-tunnel
+credentials-file: /root/.cloudflared/UUID.json
+
+ingress:
+  - hostname: teleport.kihpn.online
+    service: https://192.168.1.101:443
+  - hostname: gitlab.kihpn.online
+    service: https://192.168.1.101:443
+  - hostname: rancher.kihpn.online
+    service: http://192.168.1.108:80
+  - hostname: harbor.kihpn.online
+    service: https://192.168.1.101:443
+  - service: http_status:404
+EOF
+
+# --- 3.6: Install as systemd service ---
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared
+
+
+===============================================================================
+  PHASE 4: TELEPORT — ZERO TRUST ACCESS (192.168.1.102 + AWS)
+===============================================================================
+
+# --- 4.1: AWS EC2 — Teleport Primary (t3.micro Free Tier) ---
+# Create EC2 instance, Security Group: TCP 22, 443, 3025
+
+ssh ubuntu@AWS_EC2_PUBLIC_IP
+curl https://cdn.teleport.dev/install.sh | bash -s 17.0.5
+
+teleport configure -o file --acme \
+  --acme-email=YOUR_EMAIL \
+  --cluster-name=teleport.kihpn.online \
+  > /etc/teleport.yaml
+
+sudo systemctl enable --now teleport
+sudo tctl users add admin --roles=editor,access --logins=root,ubuntu
+
+# --- 4.2: On-Prem Agent (192.168.1.102) ---
+wget https://get.gravitational.com/teleport-v13.2.0-linux-amd64-bin.tar.gz
+tar -xzf teleport-v13.2.0-linux-amd64-bin.tar.gz
+sudo mv teleport/tctl teleport/tsh teleport/teleport /usr/local/bin/
+
+sudo mkdir -p /etc/teleport
+
+# Generate join token on AWS Primary:
+sudo tctl tokens add --type=node --ttl=1h
+# Copy the token
+
+# Configure agent on 192.168.1.102:
+cat > /etc/teleport/teleport.yaml <<'EOF'
+version: v3
+teleport:
+  nodename: onprem-lab
+  data_dir: /var/lib/teleport
+  auth_token: <JOIN_TOKEN>
+  auth_servers:
+    - teleport.kihpn.online:443
+
+ssh_service:
+  enabled: "yes"
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now teleport
+
+# Verify: https://teleport.kihpn.online → should show on-prem node
+
+
+===============================================================================
+  PHASE 5: GITLAB SERVER (192.168.1.103)
+===============================================================================
+
+# --- 5.1: Install GitLab EE ---
+curl -s https://packages.gitlab.com/install/repositories/gitlab/gitlab-ee/script.deb.sh | sudo bash
+sudo apt update
+sudo apt install -y gitlab-ee=15.7.7-ee.0
+
+# --- 5.2: Configure external URL ---
+sudo vi /etc/gitlab/gitlab.rb
+# Set: external_url "https://gitlab.kihpn.online"
+
+sudo gitlab-ctl reconfigure
+
+# --- 5.3: Get initial root password ---
+sudo cat /etc/gitlab/initial_root_password
+
+# Verify: https://gitlab.kihpn.online → login as root
+
+
+===============================================================================
+  PHASE 6: HARBOR REGISTRY (192.168.1.104)
+===============================================================================
+
+# --- 6.1: Install Docker & Docker Compose ---
+sudo apt install -y docker.io docker-compose
+sudo systemctl enable --now docker
+
+# --- 6.2: Download & Install Harbor ---
+wget https://github.com/goharbor/harbor/releases/download/v2.10.0/harbor-offline-installer-v2.10.0.tgz
+tar xvf harbor-offline-installer-v2.10.0.tgz
+cd harbor
+
+# --- 6.3: Configure Harbor ---
+cp harbor.yml.tmpl harbor.yml
+vi harbor.yml
+# Set:
+#   hostname: harbor.kihpn.online
+#   http.port: 80
+#   (disable https — SSL is handled by Nginx LB)
+
+# --- 6.4: Install Harbor ---
+sudo ./install.sh
+
+# --- 6.5: Configure Docker on ALL nodes to trust Harbor ---
+cat > /etc/docker/daemon.json <<'EOF'
+{
+  "insecure-registries": ["harbor.kihpn.online"]
+}
+EOF
+sudo systemctl restart docker
+
+# Verify: https://harbor.kihpn.online → login as admin
+
+
+===============================================================================
+  PHASE 7: KUBERNETES CLUSTER — 3 NODE HA (kubeadm + containerd)
+===============================================================================
+
+# --- 7.1: Prepare ALL 3 nodes (105, 106, 107) ---
+sudo bash -c 'cat >> /etc/hosts' <<EOF
+192.168.100.105 k8s-master-1
+192.168.100.106 k8s-master-2
+192.168.100.107 k8s-master-3
+EOF
+
+sudo swapoff -a
+sudo sed -i '/swap.img/s/^/#/' /etc/fstab
+
+echo -e "overlay\nbr_netfilter" | sudo tee /etc/modules-load.d/containerd.conf
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+cat <<EOF | sudo tee /etc/sysctl.d/kubernetes.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+sudo sysctl --system
+
+# --- 7.2: Install containerd (ALL 3 nodes) ---
+sudo apt install -y curl gnupg2 software-properties-common apt-transport-https ca-certificates
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmour -o /etc/apt/trusted.gpg.d/docker.gpg
+sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+sudo apt update -y
+sudo apt install -y containerd.io
+
+containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
+sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+sudo systemctl restart containerd && sudo systemctl enable containerd
+
+# --- 7.3: Install K8s packages (ALL 3 nodes) ---
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt update -y
+sudo apt install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+
+# --- 7.4: Init cluster (ONLY on k8s-master-1) ---
+sudo kubeadm init --control-plane-endpoint "192.168.100.105:6443" --upload-certs
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+# --- 7.5: Install Calico CNI ---
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+
+# --- 7.6: Join master-2 & master-3 ---
+sudo kubeadm join 192.168.100.105:6443 \
+  --token <TOKEN> \
+  --discovery-token-ca-cert-hash <HASH> \
+  --control-plane \
+  --certificate-key <CERT_KEY>
+
+# --- 7.7: Install Helm ---
+wget https://get.helm.sh/helm-v3.16.2-linux-amd64.tar.gz
+tar xvf helm-v3.16.2-linux-amd64.tar.gz
+sudo mv linux-amd64/helm /usr/local/bin/
+
+# --- 7.8: Install NGINX Ingress Controller (NodePort) ---
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+kubectl create ns ingress-nginx
+# Edit values: type=NodePort, http=30080, https=30443
+helm -n ingress-nginx install ingress-nginx ingress-nginx/ingress-nginx
+
+# --- 7.9: Verify cluster ---
+kubectl get nodes -o wide
+kubectl get pods -n kube-system
+kubectl get svc -n ingress-nginx
+
+
+===============================================================================
+  PHASE 8: RANCHER — CLUSTER MANAGEMENT (192.168.1.108)
+===============================================================================
+
+# --- 8.1: Install Docker ---
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+
+# --- 8.2: Run Rancher container ---
+docker compose up -d
+# OR:
+docker run -d --restart=unless-stopped -p 80:80 -p 443:443 \
+  --name rancher-server \
+  --privileged \
+  rancher/rancher:latest
+
+# --- 8.3: Get bootstrap password ---
+docker logs rancher-server 2>&1 | grep "Bootstrap Password:"
+
+# --- 8.4: Import K8s cluster into Rancher ---
+# Access: https://rancher.kihpn.online
+# Login with bootstrap password → set new admin password
+# → Cluster Management → Import Existing → copy kubectl command
+# Run on k8s-master-1:
+kubectl apply -f <RANCHER_IMPORT_URL>
+
+# Verify: Rancher UI shows cluster with 3 nodes
+
+
+===============================================================================
+  PHASE 9: BUILD & DEPLOY SHOPNOW APPLICATION
+===============================================================================
+
+# --- 9.1: Build images on Dev Server ---
+cd shopnow-backend
+docker compose build
+
+# --- 9.2: Tag & push to Harbor ---
+docker tag api-gateway:latest harbor.kihpn.online/shopnow/api-gateway:v1
+docker tag discovery-server:latest harbor.kihpn.online/shopnow/discovery-server:v1
+docker tag config-server:latest harbor.kihpn.online/shopnow/config-server:v1
+docker tag product-service:latest harbor.kihpn.online/shopnow/product-service:v1
+docker tag shopping-cart-service:latest harbor.kihpn.online/shopnow/shopping-cart-service:v1
+docker tag user-service:latest harbor.kihpn.online/shopnow/user-service:v1
+
+docker login harbor.kihpn.online
+docker push harbor.kihpn.online/shopnow/api-gateway:v1
+docker push harbor.kihpn.online/shopnow/discovery-server:v1
+docker push harbor.kihpn.online/shopnow/config-server:v1
+docker push harbor.kihpn.online/shopnow/product-service:v1
+docker push harbor.kihpn.online/shopnow/shopping-cart-service:v1
+docker push harbor.kihpn.online/shopnow/user-service:v1
+
+# (Also build & push frontend)
+cd ../shopnow-frontend
+docker build -t harbor.kihpn.online/shopnow/frontend:v1 .
+docker push harbor.kihpn.online/shopnow/frontend:v1
+
+# --- 9.3: Integration test with docker-compose ---
+cd ../shopnow-backend
+docker compose up -d
+# Test API endpoints:
+curl http://localhost:5860/api/product
+curl http://localhost:5860/api/user
+docker compose down
+
+# --- 9.4: Create K8s namespace & registry secret ---
+kubectl create namespace shopnow
+
+kubectl create secret docker-registry shopnow-registry-secret \
+  --docker-server=harbor.kihpn.online \
+  --docker-username=admin \
+  --docker-password=<HARBOR_PASSWORD> \
+  --namespace=shopnow
+
+# --- 9.5: Apply K8s manifests (in dependency order) ---
+kubectl apply -f Shopnow-yaml/shopnow-postgresql.yaml
+kubectl apply -f Shopnow-yaml/shopnow-keycloak-mysql.yaml
+kubectl apply -f Shopnow-yaml/shopnow-keycloak-realms.yaml
+kubectl apply -f Shopnow-yaml/shopnow-discovery-server.yaml
+kubectl apply -f Shopnow-yaml/shopnow-product-service.yaml
+kubectl apply -f Shopnow-yaml/shopnow-cart-service.yaml
+kubectl apply -f Shopnow-yaml/shopnow-user-service.yaml
+kubectl apply -f Shopnow-yaml/shopnow-api-gateway.yaml
+kubectl apply -f Shopnow-yaml/shopnow-frontend.yaml
+
+# --- 9.6: Verify deployment ---
+kubectl get pods -n shopnow
+kubectl get svc -n shopnow
+kubectl get ingress -n shopnow
+kubectl get hpa -n shopnow
+
+
+===============================================================================
+  PHASE 10: VERIFICATION & SMOKE TESTS
+===============================================================================
+
+# --- 10.1: Check all pods running ---
+kubectl get pods -n shopnow -o wide
+# Expected: all pods Running (1/1)
+
+# --- 10.2: Check HPA ---
+kubectl get hpa -n shopnow
+# Expected: TARGETS showing CPU usage / 50%
+
+# --- 10.3: External access test ---
+curl -I https://gitlab.kihpn.online
+curl -I https://harbor.kihpn.online
+curl -I https://rancher.kihpn.online
+curl -I https://teleport.kihpn.online
+
+# --- 10.4: Cloudflare Tunnel status ---
+sudo systemctl status cloudflared
+sudo journalctl -u cloudflared --no-pager -n 20
+
+# --- 10.5: K8s cluster health ---
+kubectl get nodes -o wide
+kubectl top nodes    # (requires metrics-server)
+kubectl top pods -n shopnow
+
+
+===============================================================================
+  PHASE 11: CLEANUP (If Needed)
+===============================================================================
+
+# --- Delete ShopNow ---
+kubectl delete -f Shopnow-yaml/ --all
+kubectl delete namespace shopnow
+
+# --- Remove Rancher import ---
+kubectl delete -f <RANCHER_IMPORT_URL>
+
+# --- Reset K8s cluster ---
+sudo kubeadm reset -f
+sudo rm -rf /var/lib/etcd
+sudo rm -rf /etc/kubernetes/manifests/*
+
+# --- Stop Cloudflare Tunnel ---
+sudo systemctl stop cloudflared
+sudo cloudflared tunnel delete <TUNNEL_NAME>
+
+
+===============================================================================
+  END OF DEPLOYMENT STEPS
+===============================================================================
